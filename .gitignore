@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# venv (uv.lock is intentionally committed for reproducible dev envs)
+.venv/
+
+# Build
+dist/
+build/
+
+# Test
+.pytest_cache/
+
+# Runtime state this library itself writes
+*.ml3error*.db*
+
+# Secrets
+.env
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
