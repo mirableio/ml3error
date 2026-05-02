@@ -92,6 +92,28 @@ def test_redis_list_and_set_resolved(redis_store):
     assert "fp-X" in resolved
 
 
+def test_redis_crash_store_handles_regression(redis_store):
+    """RedisCrashStore.decide() must mirror the regression handling in
+    RedisStore: a resolved fp firing again returns was_resolved=True,
+    bypasses cooldown, and clears the resolved flag."""
+    from ml3error.store.redis import RedisCrashStore
+
+    redis_store.decide("fp-cr", FP, 60, 1000.0)
+    redis_store.record_sent("fp-cr", 1000.0, 0)
+    redis_store.set_resolved("fp-cr", True)
+
+    cs = RedisCrashStore("redis://localhost:6379/0")
+    try:
+        d = cs.decide("fp-cr", FP, 60, 1010.0)  # inside cooldown
+        assert d.should_send is True
+        assert d.was_resolved is True
+    finally:
+        cs.close()
+    # The flag was cleared.
+    items = redis_store.list_fingerprints(resolved=True)
+    assert all(it["fp"] != "fp-cr" for it in items)
+
+
 def test_redis_crash_store_record_sent_does_not_typeerror(redis_store):
     """Regression: RedisCrashStore.record_sent used to TypeError because
     it forwarded to RedisStore.record_sent which now requires reported_count."""

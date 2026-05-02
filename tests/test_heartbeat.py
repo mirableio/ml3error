@@ -43,6 +43,8 @@ def test_format_summary_lists_active_errors(tmp_path):
     assert "OldError" not in body  # filtered by window
     assert "DoneError" not in body  # filtered by resolved
     assert "1 active error" in subj
+    # Active-errors variant uses the alert emoji.
+    assert "🚨" in subj
     # Per-row lifetime total is still shown in the body.
     assert "5× total" in body
     assert "Library:" not in body  # no transport/dropped errors → skipped
@@ -52,6 +54,14 @@ def test_format_summary_surfaces_library_stats_when_nonzero():
     now = 1_000_000.0
     subj, body = _format_summary("proj", now, now - 3600, [], dropped=3, fails=1, suppressed=0)
     assert "Library: 1 transport failure(s), 3 dropped" in body
+
+
+def test_format_summary_uses_check_emoji_when_no_errors():
+    now = 1_000_000.0
+    subj, body = _format_summary("proj", now, now - 3600, [], dropped=0, fails=0, suppressed=0)
+    assert "✅" in subj
+    assert "0 active errors" in subj
+    assert "No errors active in this window" in body
 
 
 def test_preview_does_not_touch_state(tmp_path):

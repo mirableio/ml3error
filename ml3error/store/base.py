@@ -9,6 +9,10 @@ class Decision:
     should_send: bool
     first_seen: float
     suppressed_count: int
+    # True if the fingerprint was marked resolved before this occurrence.
+    # Stores auto-clear `resolved` on every occurrence so the next firing
+    # surfaces the regression in the outgoing message.
+    was_resolved: bool = False
 
 
 class Store(Protocol):

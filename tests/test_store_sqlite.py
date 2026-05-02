@@ -172,6 +172,47 @@ def test_crash_store_record_sent_touches_last_activity(tmp_path):
     assert row["last_activity"] == now
 
 
+def test_resolved_auto_clears_on_next_occurrence(tmp_path):
+    """Resolved is sticky from the user's perspective only until the
+    fingerprint fires again — then it auto-unresolves and the Decision
+    surfaces was_resolved so the message can show a regression banner."""
+    store = SQLiteStore(str(tmp_path / "s.db"))
+    now = 1_000_000.0
+    d0 = store.decide("fp1", FP, 60, now)
+    store.record_sent("fp1", now, d0.suppressed_count)
+    store.set_resolved("fp1", True)
+
+    # Fire again outside cooldown — should unresolve and report regression.
+    d1 = store.decide("fp1", FP, 60, now + 1000)
+    assert d1.should_send is True
+    assert d1.was_resolved is True
+
+    items = store.list_fingerprints()
+    fp_row = next(it for it in items if it["fp"] == "fp1")
+    assert fp_row["resolved"] is False  # auto-cleared
+
+
+def test_resolved_regression_bypasses_cooldown(tmp_path):
+    """A resolved fp firing inside cooldown must yield should_send=True
+    (with was_resolved=True) so the user sees an immediate REOPENED
+    alert. Without this the in-cooldown fire silently clears resolved
+    and the next post-cooldown send wouldn't carry the regression flag."""
+    store = SQLiteStore(str(tmp_path / "s.db"))
+    now = 1_000_000.0
+    d0 = store.decide("fp1", FP, 60, now)
+    store.record_sent("fp1", now, d0.suppressed_count)
+    store.set_resolved("fp1", True)
+
+    # Firing again at now+10 → still inside the 60s cooldown.
+    d = store.decide("fp1", FP, 60, now + 10)
+    assert d.should_send is True
+    assert d.was_resolved is True
+
+    # resolved is cleared after the regression decision.
+    items = store.list_fingerprints()
+    assert next(it for it in items if it["fp"] == "fp1")["resolved"] is False
+
+
 def test_list_and_set_resolved(tmp_path):
     store = SQLiteStore(str(tmp_path / "s.db"))
     store.decide("fpA", ("ValueError", "a.py", "fa"), 60, 1000.0)

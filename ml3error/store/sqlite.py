@@ -101,7 +101,7 @@ class SQLiteStore:
     ) -> Decision:
         exc_type, rel_path, func_name = fp
         row = self._conn.execute(
-            "SELECT first_seen, last_notified, suppressed_count "
+            "SELECT first_seen, last_notified, suppressed_count, resolved "
             "FROM fingerprints WHERE fp=?",
             (fp_key,),
         ).fetchone()
@@ -116,25 +116,32 @@ class SQLiteStore:
             )
             return Decision(should_send=True, first_seen=now, suppressed_count=0)
 
-        first_seen, last_notified, suppressed_count = row
-        if last_notified is None or (now - last_notified) >= cooldown_seconds:
-            # Touch last_activity so pruning sees this as active even
-            # when sends keep failing (last_notified stays NULL/stale).
-            # Also bump total_count for the occurrence.
+        first_seen, last_notified, suppressed_count, resolved = row
+        was_resolved = bool(resolved)
+        cooldown_expired = (
+            last_notified is None or (now - last_notified) >= cooldown_seconds
+        )
+        # Bypass cooldown when a resolved fp regresses — the user
+        # explicitly said "fixed", so the very next occurrence deserves
+        # an immediate alert with the REOPENED banner. Without this,
+        # in-cooldown regressions silently clear `resolved` and the
+        # banner never reaches the user when cooldown later expires.
+        if cooldown_expired or was_resolved:
             self._conn.execute(
                 "UPDATE fingerprints SET last_activity=?, "
-                "total_count = total_count + 1 WHERE fp=?",
+                "total_count = total_count + 1, resolved=0 WHERE fp=?",
                 (now, fp_key),
             )
             return Decision(
                 should_send=True,
                 first_seen=first_seen,
                 suppressed_count=int(suppressed_count),
+                was_resolved=was_resolved,
             )
 
         self._conn.execute(
             "UPDATE fingerprints SET suppressed_count = suppressed_count + 1, "
-            "total_count = total_count + 1, last_activity=? WHERE fp=?",
+            "total_count = total_count + 1, last_activity=?, resolved=0 WHERE fp=?",
             (now, fp_key),
         )
         _meta_bump(self._conn, "suppressed")
@@ -142,6 +149,7 @@ class SQLiteStore:
             should_send=False,
             first_seen=first_seen,
             suppressed_count=int(suppressed_count) + 1,
+            was_resolved=False,  # not resolved at decision time anyway
         )
 
     def record_sent(self, fp_key: str, now: float, reported_count: int) -> None:
@@ -155,6 +163,12 @@ class SQLiteStore:
 
     def bump_suppressed(self, fp_key: str) -> None:
         now = time.time()
+        # Same auto-unresolve rule as decide() — a real occurrence
+        # flips a resolved fingerprint back to unresolved.
+        self._conn.execute(
+            "UPDATE fingerprints SET resolved=0 WHERE fp=?",
+            (fp_key,),
+        )
         self._conn.execute(
             "UPDATE fingerprints SET suppressed_count = suppressed_count + 1, "
             "total_count = total_count + 1, last_activity=? WHERE fp=?",
@@ -279,7 +293,7 @@ class SQLiteCrashStore:
         try:
             conn = self._ensure()
             row = conn.execute(
-                "SELECT first_seen, last_notified, suppressed_count "
+                "SELECT first_seen, last_notified, suppressed_count, resolved "
                 "FROM fingerprints WHERE fp=?",
                 (fp_key,),
             ).fetchone()
@@ -299,14 +313,17 @@ class SQLiteCrashStore:
                 pass
             return Decision(should_send=True, first_seen=now, suppressed_count=0)
 
-        first_seen, last_notified, suppressed_count = row
-        if last_notified is None or (now - last_notified) >= cooldown_seconds:
-            # Touch last_activity and bump total_count so this crash is
-            # reflected in the review UI and isn't pruned as "inactive".
+        first_seen, last_notified, suppressed_count, resolved = row
+        was_resolved = bool(resolved)
+        cooldown_expired = (
+            last_notified is None or (now - last_notified) >= cooldown_seconds
+        )
+        # Bypass cooldown for resolved regressions — see SQLiteStore.decide.
+        if cooldown_expired or was_resolved:
             try:
                 conn.execute(
                     "UPDATE fingerprints SET last_activity=?, "
-                    "total_count = total_count + 1 WHERE fp=?",
+                    "total_count = total_count + 1, resolved=0 WHERE fp=?",
                     (now, fp_key),
                 )
             except sqlite3.Error:
@@ -315,14 +332,13 @@ class SQLiteCrashStore:
                 should_send=True,
                 first_seen=first_seen,
                 suppressed_count=int(suppressed_count),
+                was_resolved=was_resolved,
             )
-        # Inside cooldown: count this occurrence against suppressed/total
-        # (same semantics as SQLiteStore.decide). The meta.suppressed
-        # counter is bumped too so the next heartbeat surfaces it.
+        # Inside cooldown: same semantics as SQLiteStore.decide.
         try:
             conn.execute(
                 "UPDATE fingerprints SET suppressed_count = suppressed_count + 1, "
-                "total_count = total_count + 1, last_activity=? WHERE fp=?",
+                "total_count = total_count + 1, last_activity=?, resolved=0 WHERE fp=?",
                 (now, fp_key),
             )
             _meta_bump(conn, "suppressed")
@@ -332,6 +348,7 @@ class SQLiteCrashStore:
             should_send=False,
             first_seen=first_seen,
             suppressed_count=int(suppressed_count) + 1,
+            was_resolved=False,
         )
 
     def record_sent(self, fp_key: str, now: float) -> None:

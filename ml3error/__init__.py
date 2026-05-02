@@ -283,8 +283,13 @@ def report(exc: BaseException, locals: bool | None = None) -> None:
             first_seen=decision.first_seen,
             suppressed_count=decision.suppressed_count,
             with_locals=with_locals,
+            regression=decision.was_resolved,
         )
-        return _transport_mod.render(payload, cooldown_hours=r.cfg.cooldown_hours)
+        return _transport_mod.render(
+            payload,
+            cooldown_hours=r.cfg.cooldown_hours,
+            markup=r.transport.markup,
+        )
 
     _enqueue(fp, render)
 
@@ -305,8 +310,13 @@ def _report_log_record(record: "logging.LogRecord") -> None:  # noqa: F821
             record=record,
             first_seen=decision.first_seen,
             suppressed_count=decision.suppressed_count,
+            regression=decision.was_resolved,
         )
-        return _transport_mod.render(payload, cooldown_hours=r.cfg.cooldown_hours)
+        return _transport_mod.render(
+            payload,
+            cooldown_hours=r.cfg.cooldown_hours,
+            markup=r.transport.markup,
+        )
 
     _enqueue(fp, render)
 
@@ -401,8 +411,13 @@ def _crash_handler(
             first_seen=decision.first_seen,
             suppressed_count=decision.suppressed_count,
             with_locals=r.cfg.with_locals,
+            regression=decision.was_resolved,
         )
-        subject, body = _transport_mod.render(payload, cooldown_hours=r.cfg.cooldown_hours)
+        subject, body = _transport_mod.render(
+            payload,
+            cooldown_hours=r.cfg.cooldown_hours,
+            markup=r.transport.markup,
+        )
         ok = r.transport.send_with_deadline(subject, body, CRASH_TIMEOUT)
         if ok:
             r.crash_store.record_sent(fp_key, now)

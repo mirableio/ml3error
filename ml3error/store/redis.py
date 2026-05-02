@@ -70,10 +70,16 @@ class RedisStore:
         last_notified_s = data.get("last_notified")
         last_notified = float(last_notified_s) if last_notified_s else None
         suppressed_count = int(data.get("suppressed_count", 0))
+        was_resolved = bool(int(data.get("resolved", 0)))
+        cooldown_expired = (
+            last_notified is None or (now - last_notified) >= cooldown_seconds
+        )
 
-        if last_notified is None or (now - last_notified) >= cooldown_seconds:
+        # Bypass cooldown for resolved regressions — see SQLiteStore.decide.
+        if cooldown_expired or was_resolved:
             with self._r.pipeline() as pipe:
                 pipe.hset(key, "last_activity", now)
+                pipe.hset(key, "resolved", 0)
                 pipe.hincrby(key, "total_count", 1)
                 pipe.expire(key, _TTL)
                 pipe.execute()
@@ -81,19 +87,22 @@ class RedisStore:
                 should_send=True,
                 first_seen=first_seen,
                 suppressed_count=suppressed_count,
+                was_resolved=was_resolved,
             )
 
         with self._r.pipeline() as pipe:
             pipe.hset(key, "last_activity", now)
+            pipe.hset(key, "resolved", 0)
             pipe.hincrby(key, "suppressed_count", 1)
             pipe.hincrby(key, "total_count", 1)
             pipe.hincrby(_meta_key(), "suppressed", 1)
             pipe.expire(key, _TTL)
-            _, new_count, _, _, _ = pipe.execute()
+            _, _, new_count, _, _, _ = pipe.execute()
         return Decision(
             should_send=False,
             first_seen=first_seen,
             suppressed_count=int(new_count),
+            was_resolved=False,
         )
 
     def record_sent(self, fp_key: str, now: float, reported_count: int) -> None:
@@ -114,7 +123,7 @@ class RedisStore:
     def bump_suppressed(self, fp_key: str) -> None:
         key = _fp_key(fp_key)
         with self._r.pipeline() as pipe:
-            pipe.hset(key, "last_activity", time.time())
+            pipe.hset(key, mapping={"last_activity": time.time(), "resolved": 0})
             pipe.hincrby(key, "suppressed_count", 1)
             pipe.hincrby(key, "total_count", 1)
             pipe.hincrby(_meta_key(), "suppressed", 1)
@@ -248,17 +257,27 @@ class RedisCrashStore:
         last_notified_s = data.get("last_notified")
         last_notified = float(last_notified_s) if last_notified_s else None
         suppressed_count = int(data.get("suppressed_count", 0))
-        if last_notified is None or (now - last_notified) >= cooldown_seconds:
+        was_resolved = bool(int(data.get("resolved", 0)))
+        cooldown_expired = (
+            last_notified is None or (now - last_notified) >= cooldown_seconds
+        )
+        # Bypass cooldown for resolved regressions — see RedisStore.decide.
+        if cooldown_expired or was_resolved:
             try:
-                self._r.hset(key, "last_activity", now)
+                self._r.hset(key, mapping={"last_activity": now, "resolved": 0})
                 self._r.hincrby(key, "total_count", 1)
                 self._r.expire(key, _TTL)
             except Exception:
                 pass
-            return Decision(True, first_seen, suppressed_count)
+            return Decision(
+                should_send=True,
+                first_seen=first_seen,
+                suppressed_count=suppressed_count,
+                was_resolved=was_resolved,
+            )
         # Inside cooldown — same semantics as RedisStore.decide.
         try:
-            self._r.hset(key, "last_activity", now)
+            self._r.hset(key, mapping={"last_activity": now, "resolved": 0})
             new_count = self._r.hincrby(key, "suppressed_count", 1)
             self._r.hincrby(key, "total_count", 1)
             self._r.hincrby(_meta_key(), "suppressed", 1)
@@ -266,7 +285,12 @@ class RedisCrashStore:
             suppressed_count = int(new_count)
         except Exception:
             pass
-        return Decision(False, first_seen, suppressed_count)
+        return Decision(
+            should_send=False,
+            first_seen=first_seen,
+            suppressed_count=suppressed_count,
+            was_resolved=False,
+        )
 
     def record_sent(self, fp_key: str, now: float) -> None:
         try:

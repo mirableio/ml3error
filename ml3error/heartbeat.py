@@ -47,6 +47,7 @@ def _format_summary(
     dropped: int,
     fails: int,
     suppressed: int,
+    markup: str = "plain",
 ) -> tuple[str, str]:
     # Restrict to errors active in this window. If we have no
     # last_heartbeat yet, treat everything present as "this window".
@@ -75,19 +76,46 @@ def _format_summary(
     # total_count is lifetime, so summing across recently-active rows
     # would overstate the window's activity for long-lived fingerprints.
     # Per-row totals below are still useful context.
+    # Lead with an emoji that's easy to scan in a Telegram chat list:
+    # ✅ when nothing fired, 🚨 when at least one error is active.
+    icon = "✅" if unique == 0 else "🚨"
     noun = "error" if unique == 1 else "errors"
-    subject = f"[{project}] ml3error digest — {unique} active {noun} {window}"
+    subject = f"[{project}] {icon} ml3error digest — {unique} active {noun} {window}"
 
-    lines: list[str] = [subject, ""]
+    if markup == "html":
+        # HTML-escape user-controlled content (project name, exception
+        # type, paths, function names) so Telegram's parse_mode=html
+        # doesn't treat e.g. `<module>` as an unclosed tag and reject
+        # the whole message.
+        from .transport import _esc_html as _esc
+
+        head = (
+            f"<b>{_esc(f'[{project}]')}</b> {icon} ml3error digest — "
+            f"<b>{unique}</b> active {noun} {_esc(window)}"
+        )
+    else:
+        _esc = lambda s: s
+        head = subject
+
+    lines: list[str] = [head, ""]
     if active:
         lines.append(f"Most recent ({min(_TOP_N, len(active))} of {unique}):")
         for fp in active[:_TOP_N]:
-            loc = f"{fp['rel_path']}:{fp['func_name']}()"
-            lines.append(
-                f"  {fp['exc_type']}  {loc}  "
-                f"(last {_fmt_rel(fp['last_activity'], now)}, "
-                f"{fp['total_count']}× total)"
-            )
+            loc = _esc(f"{fp['rel_path']}:{fp['func_name']}()")
+            exc_type = _esc(fp["exc_type"])
+            if markup == "html":
+                line = (
+                    f"  <b>{exc_type}</b>  <code>{loc}</code>  "
+                    f"(last {_esc(_fmt_rel(fp['last_activity'], now))}, "
+                    f"{fp['total_count']}× total)"
+                )
+            else:
+                line = (
+                    f"  {exc_type}  {loc}  "
+                    f"(last {_fmt_rel(fp['last_activity'], now)}, "
+                    f"{fp['total_count']}× total)"
+                )
+            lines.append(line)
     else:
         lines.append("No errors active in this window. ✓")
 
@@ -97,6 +125,7 @@ def _format_summary(
             f"Library: {fails} transport failure(s), {dropped} dropped from queue."
         )
 
+    # Subject is always plain (used as email Subject only); body picks up markup.
     return subject, "\n".join(lines)
 
 
@@ -156,7 +185,8 @@ class Heartbeat:
             since = self._store.get_last_heartbeat()
             fingerprints = self._store.list_fingerprints(resolved=False)
         subject, body = _format_summary(
-            self._project, now, since, fingerprints, dropped, fails, suppressed
+            self._project, now, since, fingerprints, dropped, fails, suppressed,
+            markup=getattr(self._transport, "markup", "plain"),
         )
         ok = False
         try:
