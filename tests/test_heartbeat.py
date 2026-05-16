@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 
-from ml3error.heartbeat import Heartbeat, _format_summary
+from ml3error.heartbeat import Heartbeat, _format_summary, _today_slot_timestamp
 from ml3error.store.sqlite import SQLiteStore
 from ml3error.config import Config
 from datetime import time as dt_time
@@ -98,3 +98,34 @@ def test_fire_advances_state(tmp_path):
     # Counters reduced to zero (snapshot subtracted) and last_heartbeat set.
     assert store.read_counters() == (0, 0, 0)
     assert store.get_last_heartbeat() is not None
+
+
+def test_fire_claims_slot_once_across_shared_store(tmp_path):
+    store = SQLiteStore(str(tmp_path / "s.db"))
+    target = dt_time(9, 0)
+    now = _today_slot_timestamp(target, time.time()) + 60
+
+    t1 = _FakeTransport()
+    t2 = _FakeTransport()
+    hb1 = Heartbeat("proj", target, store, t1, threading.Lock())
+    hb2 = Heartbeat("proj", target, store, t2, threading.Lock())
+
+    assert hb1.fire(now=now) is True
+    assert hb2.fire(now=now) is False
+    assert len(t1.sent) + len(t2.sent) == 1
+
+
+def test_fire_uses_previous_heartbeat_window_after_claim(tmp_path):
+    store = SQLiteStore(str(tmp_path / "s.db"))
+    target = dt_time(9, 0)
+    slot = _today_slot_timestamp(target, time.time())
+    previous_slot = slot - 86400
+    store.set_last_heartbeat(previous_slot)
+    store.decide("fp1", FP, 60, previous_slot + 100)
+
+    transport = _FakeTransport()
+    hb = Heartbeat("proj", target, store, transport, threading.Lock())
+
+    assert hb.fire(now=slot + 60) is True
+    assert len(transport.sent) == 1
+    assert "ValueError" in transport.sent[0][1]

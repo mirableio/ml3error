@@ -75,6 +75,15 @@ def test_redis_subtract_counters_preserves_in_flight_bumps(redis_store):
     assert redis_store.read_counters()[0] == 1
 
 
+def test_redis_claim_heartbeat_is_atomic_check_and_set(redis_store):
+    assert redis_store.claim_heartbeat(123.5) == (True, None)
+    assert redis_store.get_last_heartbeat() == 123.5
+    assert redis_store.claim_heartbeat(123.5) == (False, 123.5)
+    assert redis_store.claim_heartbeat(120.0) == (False, 123.5)
+    assert redis_store.claim_heartbeat(200.0) == (True, 123.5)
+    assert redis_store.get_last_heartbeat() == 200.0
+
+
 def test_redis_list_and_set_resolved(redis_store):
     redis_store.decide("fp-X", ("ValueError", "a.py", "fa"), 60, 1000.0)
     redis_store.decide("fp-Y", ("TypeError", "b.py", "fb"), 60, 1100.0)

@@ -181,8 +181,14 @@ class Heartbeat:
         if now is None:
             now = time.time()
         with self._lock:
+            if update_state:
+                today_slot = _today_slot_timestamp(self._target, now)
+                claimed, since = self._store.claim_heartbeat(today_slot)
+                if not claimed:
+                    return False
+            else:
+                since = self._store.get_last_heartbeat()
             dropped, fails, suppressed = self._store.read_counters()
-            since = self._store.get_last_heartbeat()
             fingerprints = self._store.list_fingerprints(resolved=False)
         subject, body = _format_summary(
             self._project, now, since, fingerprints, dropped, fails, suppressed,
@@ -197,9 +203,7 @@ class Heartbeat:
         if not update_state:
             return ok
 
-        today_slot = _today_slot_timestamp(self._target, now)
         with self._lock:
-            self._store.set_last_heartbeat(today_slot)
             if ok:
                 # Subtract the snapshot (not reset) so counters bumped
                 # by other threads between snapshot and here survive into

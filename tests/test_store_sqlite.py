@@ -88,6 +88,16 @@ def test_heartbeat_roundtrip(tmp_path):
     assert store.get_last_heartbeat() == 123.5
 
 
+def test_claim_heartbeat(tmp_path):
+    store = SQLiteStore(str(tmp_path / "s.db"))
+    assert store.claim_heartbeat(123.5) == (True, None)
+    assert store.get_last_heartbeat() == 123.5
+    assert store.claim_heartbeat(123.5) == (False, 123.5)
+    assert store.claim_heartbeat(120.0) == (False, 123.5)
+    assert store.claim_heartbeat(200.0) == (True, 123.5)
+    assert store.get_last_heartbeat() == 200.0
+
+
 def test_prune_removes_stale_only(tmp_path):
     store = SQLiteStore(str(tmp_path / "s.db"))
     now = 1_000_000.0

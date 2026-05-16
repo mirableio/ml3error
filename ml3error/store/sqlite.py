@@ -202,6 +202,21 @@ class SQLiteStore:
     def set_last_heartbeat(self, ts: float) -> None:
         _meta_set(self._conn, "last_heartbeat", str(ts))
 
+    def claim_heartbeat(self, ts: float) -> tuple[bool, float | None]:
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            last = _meta_float(self._conn, "last_heartbeat")
+            if last is not None and last >= ts:
+                self._conn.execute("COMMIT")
+                return False, last
+            _meta_set(self._conn, "last_heartbeat", str(ts))
+            self._conn.execute("COMMIT")
+            return True, last
+        except Exception:
+            if self._conn.in_transaction:
+                self._conn.execute("ROLLBACK")
+            raise
+
     def prune(self, now: float, max_age_seconds: float) -> None:
         # Prune on last_activity, which is touched on every occurrence
         # (send-attempted or suppressed). A fingerprint that keeps firing

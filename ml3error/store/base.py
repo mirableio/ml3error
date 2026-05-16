@@ -78,6 +78,14 @@ class Store(Protocol):
 
     def get_last_heartbeat(self) -> float | None: ...
     def set_last_heartbeat(self, ts: float) -> None: ...
+    def claim_heartbeat(self, ts: float) -> tuple[bool, float | None]:
+        """Atomically claim a heartbeat slot.
+
+        Returns (claimed, previous_last_heartbeat). Shared stores must
+        implement this as one atomic check-and-set so only one process
+        sends the scheduled digest for a slot.
+        """
+        ...
 
     def prune(self, now: float, max_age_seconds: float) -> None: ...
 

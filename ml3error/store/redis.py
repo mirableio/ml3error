@@ -16,6 +16,16 @@ except ImportError as e:
 
 _TTL = constants.STATE_PRUNE_DAYS * 86400
 _COUNTERS = ("dropped", "transport_failures", "suppressed")
+_CLAIM_HEARTBEAT_LUA = """
+local current = redis.call("HGET", KEYS[1], "last_heartbeat")
+local current_num = tonumber(current)
+local slot = tonumber(ARGV[1])
+if current_num ~= nil and current_num >= slot then
+  return {0, current}
+end
+redis.call("HSET", KEYS[1], "last_heartbeat", ARGV[1])
+return {1, current or ""}
+"""
 
 # All keys live under this prefix. Tests monkey-patch this to isolate state.
 _PREFIX = "ml3error"
@@ -31,6 +41,15 @@ def _fp_pattern() -> str:
 
 def _meta_key() -> str:
     return f"{_PREFIX}:meta"
+
+
+def _optional_float(value) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class RedisStore:
@@ -158,6 +177,15 @@ class RedisStore:
 
     def set_last_heartbeat(self, ts: float) -> None:
         self._r.hset(_meta_key(), "last_heartbeat", ts)
+
+    def claim_heartbeat(self, ts: float) -> tuple[bool, float | None]:
+        claimed, previous = self._r.eval(
+            _CLAIM_HEARTBEAT_LUA,
+            1,
+            _meta_key(),
+            str(ts),
+        )
+        return bool(int(claimed)), _optional_float(previous)
 
     def prune(self, now: float, max_age_seconds: float) -> None:
         # TTL handles this on Redis.
